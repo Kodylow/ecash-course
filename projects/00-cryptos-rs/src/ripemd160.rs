@@ -330,3 +330,34 @@ fn rmd160_transform(state: &mut [u32; 5], block: &[u8]) {
     state[4] = state[0].wrapping_add(bb).wrapping_add(c);
     state[0] = t;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ripemd160;
+
+    #[test]
+    fn test_ripemd160() {
+        let repeated_str = "1234567890".repeat(8);
+        let a1000 = "a".repeat(1000);
+        let test_pairs = [
+            ("", "9c1185a5c5e9fc54612808977ee8f548b2258d31"),
+            ("a", "0bdc9d2d256b3ee9daae347be6f4dc835a467ffe"),
+            ("abc", "8eb208f7e05d987a9b044a8e98c6b087f15a0bfc"),
+            ("message digest", "5d0689ef49d2fae572b881b123a85ffa21595f36"),
+            (
+                repeated_str.as_str(),
+                "9b752e45573d4b39f4dbd3323cab82bf63326bfb",
+            ),
+            // ("a".repeat(1000000).as_str(), "52783243c1697bdbe16d37f97f68f08325dc1528"), // can
+            // take a while to compute
+            (a1000.as_str(), "aa69deee9a8922e92f8105e007f76110f381e9cf"), /* I made this shorter
+                                                                           * one up instead */
+        ];
+
+        for (input, expected) in test_pairs.iter() {
+            let result = ripemd160(input.as_bytes());
+            let result_hex = hex::encode(result);
+            assert_eq!(expected, &result_hex);
+        }
+    }
+}
