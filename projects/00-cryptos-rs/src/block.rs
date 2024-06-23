@@ -1,11 +1,19 @@
 use std::io::{Cursor, Read};
 
+use num_bigint::BigUint;
+use num_traits::{FromPrimitive, Num, ToPrimitive};
+use once_cell::sync::Lazy;
+
 use crate::{sha256, utils};
 
-const GENESIS_BLOCK_MAIN: &[u8] = b"0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff01d1dac2b7c";
-const GENESIS_BLOCK_TEST: &[u8] = b"0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff001d1aa4ae18";
+static GENESIS_BLOCK_MAIN: Lazy<Vec<u8>> = Lazy::new(|| {
+    hex::decode("0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c").unwrap()
+});
 
-fn decode_int(s: &mut Cursor<&[u8]>, nbytes: usize) -> u32 {
+static GENESIS_BLOCK_TEST: Lazy<Vec<u8>> = Lazy::new(|| {
+    hex::decode("0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff001d1aa4ae18").unwrap()
+});
+fn decode_int(s: &mut Cursor<&Vec<u8>>, nbytes: usize) -> u32 {
     let mut buf = vec![0; nbytes];
     s.read_exact(&mut buf).unwrap();
     u32::from_le_bytes(buf.try_into().unwrap())
@@ -15,25 +23,28 @@ fn encode_int(i: u32, nbytes: usize) -> Vec<u8> {
     i.to_le_bytes()[..nbytes].to_vec()
 }
 
-fn bits_to_target(bits: &[u8]) -> u128 {
+fn bits_to_target(bits: &[u8]) -> BigUint {
     let exponent = bits[3];
-    let coeff = u128::from_le_bytes(bits[..3].try_into().unwrap());
-    coeff * 256u128.pow((exponent - 3) as u32)
+    let coeff = BigUint::from_bytes_le(&bits[..3]);
+    coeff * BigUint::from(256u32).pow((exponent - 3) as u32)
 }
 
-fn target_to_bits(target: u128) -> Vec<u8> {
-    let mut b = target.to_be_bytes().to_vec();
-    while b[0] == 0 {
+fn target_to_bits(target: BigUint) -> Vec<u8> {
+    let mut b = target.to_bytes_be();
+    while b.len() > 1 && b[0] == 0 {
         b.remove(0);
     }
     let exponent = b.len() as u8;
-    let coeff = if b[0] >= 128 {
-        vec![0, b[0], b[1]]
-    } else {
+    let coeff = if b.len() >= 3 {
         b[..3].to_vec()
+    } else {
+        let mut v = b.clone();
+        v.resize(3, 0);
+        v
     };
+
     let mut new_bits = coeff;
-    new_bits.reverse();
+    new_bits.reverse(); // Ensure the coefficient is in little-endian order
     new_bits.push(exponent);
     new_bits
 }
@@ -42,12 +53,17 @@ fn calculate_new_bits(prev_bits: &[u8], dt: u32) -> Vec<u8> {
     let two_weeks = 60 * 60 * 24 * 14;
     let dt = dt.clamp(two_weeks / 4, two_weeks * 4);
     let prev_target = bits_to_target(prev_bits);
-    let new_target =
-        (prev_target * dt as u128 / two_weeks as u128).min(0xffff * 256u128.pow(0x1d - 3));
-    target_to_bits(new_target)
+    let new_target = (prev_target * BigUint::from(dt) / BigUint::from(two_weeks))
+        .min(BigUint::from_u64(0xffff).unwrap() * BigUint::from_u32(256).unwrap().pow(0x1d - 3));
+
+    let mut new_bits = target_to_bits(new_target);
+    if new_bits.len() < 4 {
+        new_bits.resize(4, 0);
+    }
+    new_bits
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Block {
     version: u32,
     prev_block: Vec<u8>,
@@ -58,7 +74,7 @@ struct Block {
 }
 
 impl Block {
-    fn decode(s: &mut Cursor<&[u8]>) -> Block {
+    fn decode(s: &mut Cursor<&Vec<u8>>) -> Block {
         let version = decode_int(s, 4);
         let mut prev_block = vec![0; 32];
         s.read_exact(&mut prev_block).unwrap();
@@ -97,21 +113,155 @@ impl Block {
     }
 
     fn id(&self) -> String {
-        let result = sha256::hash256(self.encode());
+        let mut result = sha256::hash256(self.encode());
+        result.reverse();
         hex::encode(result)
     }
 
-    fn target(&self) -> u128 {
+    fn target(&self) -> BigUint {
         bits_to_target(&self.bits)
     }
 
-    fn difficulty(&self) -> f64 {
-        let genesis_block_target = 0xffff * 256u128.pow(0x1d - 3);
-        genesis_block_target as f64 / self.target() as f64
+    fn difficulty(&self) -> BigUint {
+        let genesis_block_target =
+            BigUint::from_u64(0xffff).unwrap() * BigUint::from_u32(256).unwrap().pow(0x1d - 3);
+        let target = self.target();
+        let difficulty = genesis_block_target / target;
+        difficulty
     }
 
     fn validate(&self) -> bool {
-        let block_id = u128::from_str_radix(&self.id(), 16).unwrap();
-        block_id < self.target()
+        let header = BigUint::from_bytes_be(&hex::decode(&self.id()).unwrap());
+        let target = self.target();
+
+        if header >= target {
+            return false;
+        }
+
+        true
     }
+}
+
+#[test]
+fn test_block() {
+    let raw = hex::decode("020000208ec39428b17323fa0ddec8e887b4a7c53b8c0a0a220cfd0000000000000000005b0750fce0a889502d40508d39576821155e9c9e3f5c3157f961db38fd8b25be1e77a759e93c0118a4ffd71d").unwrap();
+    println!("Raw block data: {}", hex::encode(&raw));
+    let mut cursor = Cursor::new(&raw);
+    let block = Block::decode(&mut cursor);
+    println!("Decoded block: {:?}", block);
+
+    assert_eq!(block.version, 0x20000002);
+    assert_eq!(
+        block.prev_block,
+        hex::decode("000000000000000000fd0c220a0a8c3bc5a7b487e8c8de0dfa2373b12894c38e").unwrap()
+    );
+    assert_eq!(
+        block.merkle_root,
+        hex::decode("be258bfd38db61f957315c3f9e9c5e15216857398d50402d5089a8e0fc50075b").unwrap()
+    );
+    assert_eq!(block.timestamp, 0x59a7771e);
+    assert_eq!(block.bits, hex::decode("e93c0118").unwrap());
+    assert_eq!(block.nonce, hex::decode("a4ffd71d").unwrap());
+
+    let raw2 = block.encode();
+    println!("Encoded block data: {}", hex::encode(&raw2));
+    assert_eq!(raw, raw2);
+
+    let block_id = block.id();
+    println!("Block ID: {}", block_id);
+    assert_eq!(
+        block_id,
+        "0000000000000000007e9e4c586439b0cdbe13b1370bdd9435d76a644d047523"
+    );
+
+    let target = block.target();
+    println!("Block target: {:x}", target);
+    assert_eq!(
+        target,
+        BigUint::from_str_radix(
+            "0000000000000000013ce9000000000000000000000000000000000000000000",
+            16
+        )
+        .unwrap()
+    );
+
+    let difficulty = block.difficulty();
+    println!("Block difficulty: {}", difficulty);
+    assert_eq!(difficulty, BigUint::from_i64(888171856257).unwrap());
+}
+
+#[test]
+fn test_validate() {
+    let raw = hex::decode("04000000fbedbbf0cfdaf278c094f187f2eb987c86a199da22bbb20400000000000000007b7697b29129648fa08b4bcd13c9d5e60abb973a1efac9c8d573c71c807c56c3d6213557faa80518c3737ec1").unwrap();
+    println!("Raw block data for validation: {}", hex::encode(&raw));
+    let mut cursor = Cursor::new(&raw);
+    let block = Block::decode(&mut cursor);
+    println!("Decoded block for validation: {:?}", block);
+    assert!(block.validate());
+
+    let raw = hex::decode("04000000fbedbbf0cfdaf278c094f187f2eb987c86a199da22bbb20400000000000000007b7697b29129648fa08b4bcd13c9d5e60abb973a1efac9c8d573c71c807c56c3d6213557faa80518c3737ec0").unwrap();
+    println!("Raw block data for invalidation: {}", hex::encode(&raw));
+    let mut cursor = Cursor::new(&raw);
+    let block = Block::decode(&mut cursor);
+    println!("Decoded block for invalidation: {:?}", block);
+    assert!(!block.validate());
+}
+
+#[test]
+fn test_calculate_bits() {
+    let dt = 302400;
+    let prev_bits = hex::decode("54d80118").unwrap();
+    let next_bits = calculate_new_bits(&prev_bits, dt);
+    assert_eq!(next_bits, hex::decode("00157617").unwrap());
+
+    for bits in [&prev_bits, &next_bits] {
+        let target = bits_to_target(bits);
+        let bits2 = target_to_bits(target.clone());
+        assert_eq!(bits, &bits2);
+    }
+}
+
+#[test]
+fn test_genesis_block() {
+    let block_bytes = GENESIS_BLOCK_MAIN.to_vec();
+    println!("Genesis block bytes: {}", hex::encode(&block_bytes));
+    assert_eq!(block_bytes.len(), 80);
+    let mut cursor = Cursor::new(&block_bytes);
+    let block = Block::decode(&mut cursor);
+    let block_clone = block.clone();
+
+    println!("Decoded genesis block: {:?}", block);
+    assert_eq!(block.version, 1);
+    assert_eq!(block.prev_block, vec![0; 32]);
+    assert_eq!(
+        hex::encode(&block.merkle_root),
+        "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
+    );
+    assert_eq!(block.timestamp, 1231006505);
+    assert_eq!(
+        hex::encode(&block.bits.iter().rev().cloned().collect::<Vec<u8>>()),
+        "1d00ffff"
+    );
+    assert_eq!(
+        u32::from_le_bytes(block.nonce.try_into().unwrap()),
+        2083236893
+    );
+
+    let block_id = block_clone.id();
+    println!("Genesis block ID: {}", block_id);
+    assert_eq!(
+        block_id,
+        "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
+    );
+
+    let target = block_clone.target();
+    println!("Genesis block target: {:064x}", target);
+    assert_eq!(
+        format!("{:064x}", target),
+        "00000000ffff0000000000000000000000000000000000000000000000000000"
+    );
+
+    let validation = block_clone.validate();
+    println!("Genesis block validation: {}", validation);
+    assert!(validation);
 }
