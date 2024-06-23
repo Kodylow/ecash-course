@@ -1,5 +1,5 @@
 [workspace]
-members = ["ecc"]
+members = ["projects/00-cryptos-rs"]
 resolver = "2"
 
 [workspace.package]
@@ -10,5 +10,3 @@ keywords = ["fedimint", "bitcoin", "lightning", "ecash", "cryptography"]
 license = "MIT"
 readme = "README.md"
 authors = ["Kody Low <kodylow7@gmail.com>"]
-
-[workspace.dependencies]
