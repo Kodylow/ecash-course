@@ -47,11 +47,11 @@ impl TxFetcher {
 
 #[derive(Debug, Default)]
 pub struct Tx {
-    version: u32,
-    tx_ins: Vec<TxIn>,
-    tx_outs: Vec<TxOut>,
-    locktime: u32,
-    segwit: bool,
+    pub version: u32,
+    pub tx_ins: Vec<TxIn>,
+    pub tx_outs: Vec<TxOut>,
+    pub locktime: u32,
+    pub segwit: bool,
 }
 
 impl Tx {
@@ -138,12 +138,12 @@ impl Tx {
 
 #[derive(Debug, Default, Clone)]
 pub struct TxIn {
-    prev_tx: Vec<u8>,
-    prev_index: u32,
-    script_sig: Script,
-    sequence: u32,
-    witness: Vec<Vec<u8>>,
-    net: String,
+    pub prev_tx: Vec<u8>,
+    pub prev_index: u32,
+    pub script_sig: Script,
+    pub sequence: u32,
+    pub witness: Vec<Vec<u8>>,
+    pub net: String,
 }
 
 impl TxIn {
@@ -216,7 +216,7 @@ const OP_CHECKSIG: u8 = 0xac;
 
 #[derive(Debug, Default, Clone)]
 pub struct Script {
-    cmds: Vec<Vec<u8>>,
+    pub cmds: Vec<Vec<u8>>,
 }
 
 impl Script {

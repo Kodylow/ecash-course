@@ -176,3 +176,92 @@ pub fn address_to_pkb_hash(b58check_address: &str) -> Vec<u8> {
     );
     byte_address[1..21].to_vec()
 }
+
+#[test]
+fn test_public_key_gen() {
+    // Example taken from Chapter 4 of Mastering Bitcoin
+    let sk = BigUint::from_bytes_be(
+        &hex::decode("1E99423A4ED27608A15A2616A2B0E9E52CED330AC530EDCC32C8FFC6A526AEDD").unwrap(),
+    );
+    let public_key = PublicKey::from_sk(&sk);
+    assert_eq!(
+        format!("{:064x}", public_key.x.unwrap()).to_uppercase(),
+        "F028892BAD7ED57D2FB57BF33081D5CFCF6F9ED3D3D7F159C2E2FFF579DC341A"
+    );
+    assert_eq!(
+        format!("{:064x}", public_key.y.unwrap()).to_uppercase(),
+        "07CF33DA18BD734C600B96A72BBC4749D5141C90EC8AC328AE52DDFE2E505BDB"
+    );
+}
+
+#[test]
+fn test_btc_addresses() {
+    let tests = vec![
+        (
+            "main",
+            true,
+            "3aba4162c7251c891207b747840551a71939b0de081f85c4e44cf7c13e41daa6",
+            "14cxpo3MBCYYWCgF74SWTdcmxipnGUsPw3",
+        ),
+        (
+            "main",
+            true,
+            "18e14a7b6a307f426a94f8114701e7c8e774e7f9a47e2c2035db29a206321725",
+            "1PMycacnJaSqwwJqjawXBErnLsZ7RkXUAs",
+        ),
+        (
+            "main",
+            true,
+            "000000000000000000000000000000000000000000000000000000000012345deadbeef",
+            "1F1Pn2y6pDb68E5nYJJeba4TLg2U7B6KF1",
+        ),
+        (
+            "test",
+            true,
+            "0000000000000000000000000000000000000000000000000000000000000000000002020",
+            "mopVkxp8UhXqRYbCYJsbeE1h1fiF64jcoH",
+        ),
+        (
+            "test",
+            false,
+            "0000000000000000000000000000000000000000000000000000000000000000000005002",
+            "mmTPbXQFxboEtNRkwfh6K51jvdtHLxGeMA",
+        ),
+    ];
+
+    for (net, compressed, secret_key, expected_address) in tests {
+        let sk = BigUint::from_bytes_be(&hex::decode(secret_key).unwrap());
+        let pk = PublicKey::from_sk(&sk);
+        let addr = pk.address(net, compressed);
+        assert_eq!(addr, expected_address);
+
+        let pkb_hash = pk.encode(compressed, true);
+        let pkb_hash2 = address_to_pkb_hash(expected_address);
+        assert_eq!(pkb_hash, pkb_hash2);
+    }
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn test_pk_sec() {
+    use num_traits::FromPrimitive;
+    let G = &BITCOIN.gen.G;
+
+    let tests = vec![
+        (&BigUint::from_u64(5000).unwrap() * G, false, "04ffe558e388852f0120e46af2d1b370f85854a8eb0841811ece0e3e03d282d57c315dc72890a4f10a1481c031b03b351b0dc79901ca18a00cf009dbdb157a1d10"),
+        (&BigUint::from_u64(2018).unwrap().pow(5) * G, false, "04027f3da1918455e03c46f659266a1bb5204e959db7364d2f473bdf8f0a13cc9dff87647fd023c13b4a4994f17691895806e1b40b57f4fd22581a4f46851f3b06"),
+        (&BigUint::from_bytes_be(&hex::decode("deadbeef12345").unwrap()) * G, false, "04d90cd625ee87dd38656dd95cf79f65f60f7273b67d3096e68bd81e4f5342691f842efa762fd59961d0e99803c61edba8b3e3f7dc3a341836f97733aebf987121"),
+        (&BigUint::from_u64(5001).unwrap() * G, true, "0357a4f368868a8a6d572991e484e664810ff14c05c0fa023275251151fe0e53d1"),
+        (&BigUint::from_u64(2019).unwrap().pow(5) * G, true, "02933ec2d2b111b92737ec12f1c5d20f3233a0ad21cd8b36d0bca7a0cfa5cb8701"),
+        (&BigUint::from_bytes_be(&hex::decode("deadbeef54321").unwrap()) * G, true, "0296be5b1292f6c856b3c5654e886fc13511462059089cdf9c479623bfcbe77690"),
+    ];
+
+    for (P, compressed, sec_gt) in tests {
+        let sec = PublicKey::from_point(P.clone()).encode(compressed, false);
+        assert_eq!(hex::encode(sec), sec_gt);
+
+        let P2 = PublicKey::decode(&hex::decode(sec_gt).unwrap());
+        assert_eq!(P.x, P2.x);
+        assert_eq!(P.y, P2.y);
+    }
+}

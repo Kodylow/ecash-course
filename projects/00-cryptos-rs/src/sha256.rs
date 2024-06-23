@@ -119,3 +119,29 @@ pub fn sha256(mut b: Vec<u8>) -> Vec<u8> {
 pub fn hash256(input: Vec<u8>) -> Vec<u8> {
     sha256(sha256(input))
 }
+
+#[test]
+fn test_sha256() {
+    use std::io::Read;
+
+    use sha2::{Digest, Sha256};
+
+    let test_bytes = vec![
+        b"".to_vec(),
+        b"abc".to_vec(),
+        b"hello".to_vec(),
+        b"a longer message to make sure that a larger number of blocks works okay too"
+            .repeat(15)
+            .bytes()
+            .collect::<Result<Vec<u8>, _>>()
+            .unwrap(),
+    ];
+
+    for b in test_bytes {
+        let mut hasher = Sha256::new();
+        hasher.update(b.clone());
+        let gt = hasher.finalize();
+        let yolo = sha256(b.clone());
+        assert_eq!(gt.as_slice(), yolo.as_slice());
+    }
+}
