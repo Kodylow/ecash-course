@@ -1,0 +1,14 @@
+[workspace]
+members = ["ecc"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+repository = "https://github.com/kodylow/ecash-course"
+keywords = ["fedimint", "bitcoin", "lightning", "ecash", "cryptography"]
+license = "MIT"
+readme = "README.md"
+authors = ["Kody Low <kodylow7@gmail.com>"]
+
+[workspace.dependencies]
