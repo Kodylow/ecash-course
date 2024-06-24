@@ -108,15 +108,21 @@ impl RU256 {
         Self { v: U256::one() }
     }
 
-    /// Modular addition
     pub fn add_mod(&self, b: &RU256, p: &RU256) -> Self {
+        // Calculate x1 and x2 as the values of self and b modulo p
         let x1 = self.v % p.v;
         let x2 = b.v % p.v;
-        let (x3, overflow) = x1.overflowing_add(x2);
 
-        let result = if overflow || x3 >= p.v { x3 - p.v } else { x3 };
+        // Attempt to add x1 and x2
+        let (mut x3, overflow) = x1.overflowing_add(x2);
 
-        Self { v: result }
+        // If there's an overflow or x3 is greater than or equal to p, adjust x3
+        if overflow || x3 >= p.v {
+            x3 = x3.overflowing_sub(p.v).0;
+        }
+
+        // Return the new RU256 instance with the result value
+        Self { v: x3 }
     }
 
     /// Modular subtraction
@@ -126,7 +132,7 @@ impl RU256 {
         let x3 = if x1 >= x2 {
             (x1 - x2) % p.v
         } else {
-            (p.v + x1 - x2) % p.v
+            (p.v - (x2 - x1)) % p.v
         };
 
         Self { v: x3 }

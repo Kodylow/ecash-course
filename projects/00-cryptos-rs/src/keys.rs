@@ -14,7 +14,9 @@ pub fn gen_secret_key(n: &RU256) -> RU256 {
         let mut rng = rand::thread_rng();
         let mut key_bytes = [0u8; 32];
         rng.fill(&mut key_bytes);
+        println!("key_bytes: {:?}", key_bytes);
         let key = RU256::from_bytes(&key_bytes);
+        println!("key: {:?}", key);
         if key >= RU256::from_u64(1) && key < *n {
             return key;
         }
