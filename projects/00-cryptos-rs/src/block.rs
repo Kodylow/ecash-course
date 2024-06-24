@@ -1,9 +1,9 @@
 use std::io::{Cursor, Read};
 
-use num_bigint::BigUint;
-use num_traits::{FromPrimitive, Num, ToPrimitive};
+use bitcoin_num::uint::Uint256;
 use once_cell::sync::Lazy;
 
+use crate::curves::pow;
 use crate::{sha256, utils};
 
 static GENESIS_BLOCK_MAIN: Lazy<Vec<u8>> = Lazy::new(|| {
@@ -23,14 +23,22 @@ fn encode_int(i: u32, nbytes: usize) -> Vec<u8> {
     i.to_le_bytes()[..nbytes].to_vec()
 }
 
-fn bits_to_target(bits: &[u8]) -> BigUint {
+fn bits_to_target(bits: &[u8]) -> Uint256 {
     let exponent = bits[3];
-    let coeff = BigUint::from_bytes_le(&bits[..3]);
-    coeff * BigUint::from(256u32).pow((exponent - 3) as u32)
+    let mut coeff_bytes = bits[..3].to_vec();
+    coeff_bytes.reverse();
+    let mut coeff_array = [0u8; 32];
+    coeff_array[..coeff_bytes.len()].copy_from_slice(&coeff_bytes);
+    let coeff = Uint256::from_be_bytes(coeff_array);
+    coeff * pow(&Uint256::from_u64(256u64).unwrap(), (exponent - 3) as u32)
 }
 
-fn target_to_bits(target: BigUint) -> Vec<u8> {
-    let mut b = target.to_bytes_be();
+fn target_to_bits(target: Uint256) -> Vec<u8> {
+    let b_u64 = target.to_bytes();
+    let mut b = b_u64
+        .iter()
+        .flat_map(|&x| x.to_le_bytes())
+        .collect::<Vec<u8>>();
     while b.len() > 1 && b[0] == 0 {
         b.remove(0);
     }
@@ -49,12 +57,13 @@ fn target_to_bits(target: BigUint) -> Vec<u8> {
     new_bits
 }
 
-fn calculate_new_bits(prev_bits: &[u8], dt: u32) -> Vec<u8> {
+fn calculate_new_bits(prev_bits: &[u8], dt: u64) -> Vec<u8> {
     let two_weeks = 60 * 60 * 24 * 14;
     let dt = dt.clamp(two_weeks / 4, two_weeks * 4);
     let prev_target = bits_to_target(prev_bits);
-    let new_target = (prev_target * BigUint::from(dt) / BigUint::from(two_weeks))
-        .min(BigUint::from_u64(0xffff).unwrap() * BigUint::from_u32(256).unwrap().pow(0x1d - 3));
+    let new_target = (prev_target * Uint256::from_u64(dt).unwrap()
+        / Uint256::from_u64(two_weeks).unwrap())
+    .min(Uint256::from_u64(0xffff).unwrap() * pow(&Uint256::from_u64(256).unwrap(), (0x1d - 3)));
 
     let mut new_bits = target_to_bits(new_target);
     if new_bits.len() < 4 {
@@ -118,20 +127,22 @@ impl Block {
         hex::encode(result)
     }
 
-    fn target(&self) -> BigUint {
+    fn target(&self) -> Uint256 {
         bits_to_target(&self.bits)
     }
 
-    fn difficulty(&self) -> BigUint {
+    fn difficulty(&self) -> Uint256 {
         let genesis_block_target =
-            BigUint::from_u64(0xffff).unwrap() * BigUint::from_u32(256).unwrap().pow(0x1d - 3);
+            Uint256::from_u64(0xffff).unwrap() * pow(&Uint256::from_u64(256).unwrap(), (0x1d - 3));
         let target = self.target();
         let difficulty = genesis_block_target / target;
         difficulty
     }
 
     fn validate(&self) -> bool {
-        let header = BigUint::from_bytes_be(&hex::decode(&self.id()).unwrap());
+        let header_vec = hex::decode(&self.id()).unwrap();
+        let header: [u8; 32] = header_vec.try_into().unwrap();
+        let header = Uint256::from_be_bytes(header);
         let target = self.target();
 
         if header >= target {
@@ -175,19 +186,20 @@ fn test_block() {
     );
 
     let target = block.target();
-    println!("Block target: {:x}", target);
+    println!("Block target: {:?}", target);
     assert_eq!(
         target,
-        BigUint::from_str_radix(
-            "0000000000000000013ce9000000000000000000000000000000000000000000",
-            16
+        Uint256::from_be_bytes(
+            hex::decode("0000000000000000013ce9000000000000000000000000000000000000000000")
+                .unwrap()
+                .try_into()
+                .unwrap()
         )
-        .unwrap()
     );
 
     let difficulty = block.difficulty();
     println!("Block difficulty: {}", difficulty);
-    assert_eq!(difficulty, BigUint::from_i64(888171856257).unwrap());
+    assert_eq!(difficulty, Uint256::from_u64(888171856257).unwrap());
 }
 
 #[test]
@@ -255,9 +267,9 @@ fn test_genesis_block() {
     );
 
     let target = block_clone.target();
-    println!("Genesis block target: {:064x}", target);
+    println!("Genesis block target: {:?}", target);
     assert_eq!(
-        format!("{:064x}", target),
+        format!("{:?}", target),
         "00000000ffff0000000000000000000000000000000000000000000000000000"
     );
 

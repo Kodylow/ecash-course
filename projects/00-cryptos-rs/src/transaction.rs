@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
 
+use crate::bitcoin::BITCOIN;
 use crate::keys::PublicKey;
 use crate::ripemd160::ripemd160;
 use crate::sha256::{hash256, sha256};
@@ -278,7 +279,7 @@ impl Script {
         }
         let der = &signature[..signature.len() - 1];
         let sig = Signature::decode(der);
-        let pk = PublicKey::decode(pubkey);
+        let pk = PublicKey::from_bytes(pubkey, &BITCOIN.gen.G.curve);
         verify_ecdsa(&pk, mod_tx_enc, &sig)
     }
 }
