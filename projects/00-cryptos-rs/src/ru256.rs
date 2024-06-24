@@ -4,8 +4,8 @@ use std::str::FromStr;
 use primitive_types::U256;
 
 #[derive(Clone, Debug, PartialOrd)]
-pub(crate) struct RU256 {
-    pub(crate) v: U256,
+pub struct RU256 {
+    pub v: U256,
 }
 
 #[derive(Debug, PartialEq, Eq)]

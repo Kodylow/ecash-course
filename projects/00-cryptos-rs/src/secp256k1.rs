@@ -1,18 +1,24 @@
+use std::fs::File;
+use std::io::{self, BufRead};
 use std::ops::{Add, Mul, Neg};
+use std::path::Path;
 use std::str::FromStr;
+
+use primitive_types::U256;
+use secp256k1::{PublicKey, Secp256k1, SecretKey};
 
 use crate::ru256::RU256;
 
 /// Represents a point on an elliptic curve
 #[derive(PartialEq, Clone, Debug)]
-pub(crate) struct Point {
-    pub(crate) x: RU256,
-    pub(crate) y: RU256,
+pub struct Point {
+    pub x: RU256,
+    pub y: RU256,
 }
 
 impl Point {
     /// Build a point from hex strings
-    fn from_hex_coordinates(x: &str, y: &str) -> Self {
+    pub fn from_hex_coordinates(x: &str, y: &str) -> Self {
         return Point {
             x: RU256::from_str(x).unwrap(),
             y: RU256::from_str(y).unwrap(),
@@ -20,7 +26,7 @@ impl Point {
     }
 
     /// Return the uncompressed version of a point
-    fn to_hex_string(&self) -> String {
+    pub fn to_hex_string(&self) -> String {
         return format!("04{}{}", self.x.to_string(), self.y.to_string());
     }
 
@@ -44,7 +50,7 @@ impl Mul<RU256> for Point {
     fn mul(self, scalar: RU256) -> Point {
         // Implement the scalar multiplication logic here
         // This is a placeholder; replace with actual implementation
-        SECP256K1::scalar_multiplication(&scalar, &self)
+        SECP256K1::scalar_multiplication(&scalar, &self, false)
     }
 }
 
@@ -67,12 +73,12 @@ impl SECP256K1 {
 
     /// Prime value
     /// 2^256 - 2^23 - 2^9 - 2^8 - 2^7 - 2^6 - 2^4 - 1
-    pub(crate) fn p() -> RU256 {
+    pub fn p() -> RU256 {
         RU256::from_str("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F").unwrap()
     }
 
     /// Generator point
-    pub(crate) fn g() -> Point {
+    pub fn g() -> Point {
         Point {
             x: RU256::from_str("79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798")
                 .unwrap(),
@@ -82,7 +88,7 @@ impl SECP256K1 {
     }
 
     /// Group order
-    pub(crate) fn n() -> RU256 {
+    pub fn n() -> RU256 {
         RU256::from_str("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141").unwrap()
     }
 
@@ -95,7 +101,7 @@ impl SECP256K1 {
     }
 
     /// Add two different curve points
-    pub(crate) fn add_points(p1: &Point, p2: &Point) -> Point {
+    pub fn add_points(p1: &Point, p2: &Point) -> Point {
         // two points P = (xp, yp) and Q = (xq, yq)
         // lambda = (yq - yp) / (xq - xp)
         // x3 = lambda^2 - xp - xq
@@ -189,15 +195,71 @@ impl SECP256K1 {
         }
     }
 
-    /// Perform scalar multiplication on a curve point
-    pub(crate) fn scalar_multiplication(scalar: &RU256, curve_point: &Point) -> Point {
-        let mut result = Self::zero_point();
-        let mut adder = curve_point.clone();
+    fn read_lines<P>(filename: P) -> io::Result<io::Lines<io::BufReader<File>>>
+    where
+        P: AsRef<Path>,
+    {
+        let file = File::open(filename)?;
+        Ok(io::BufReader::new(file).lines())
+    }
 
-        for i in (0..scalar.v.bits()).rev() {
-            result = Self::double_point(&result);
-            if scalar.v.bit(i) {
-                result = Self::add_points(&result, &adder);
+    fn load_precomputed_points(file_path: &str) -> Vec<Point> {
+        let mut points = Vec::new();
+        if let Ok(lines) = Self::read_lines(file_path) {
+            for line in lines {
+                if let Ok(point_str) = line {
+                    let parts: Vec<&str> = point_str.split(':').collect();
+                    if parts.len() == 2 {
+                        let compressed_pubkey = parts[1];
+                        let pubkey_bytes = hex::decode(compressed_pubkey).unwrap();
+                        let pubkey = PublicKey::from_slice(&pubkey_bytes).unwrap();
+                        let uncompressed = pubkey.serialize_uncompressed();
+                        let x = RU256::from_str(&hex::encode(&uncompressed[1..33])).unwrap();
+                        let y = RU256::from_str(&hex::encode(&uncompressed[33..65])).unwrap();
+                        points.push(Point { x, y });
+                    }
+                }
+            }
+        } else {
+            println!("Failed to read lines from file: {}", file_path);
+        }
+        println!("Loaded {} precomputed points", points.len());
+        points
+    }
+
+    pub fn scalar_multiplication(
+        scalar: &RU256,
+        curve_point: &Point,
+        use_precomputed: bool,
+    ) -> Point {
+        let mut result = Self::zero_point();
+
+        if use_precomputed {
+            println!("Using precomputed points for scalar multiplication");
+            let precomputed_points = Self::load_precomputed_points(
+                "/Users/kody/Documents/github/fedi_stuff/ecash-course/projects/00-cryptos-rs/precomputed_points.txt",
+            );
+
+            for i in 0..scalar.v.bits() {
+                if scalar.v.bit(i) {
+                    let index = i as usize;
+                    if index < precomputed_points.len() {
+                        println!("Adding precomputed point for bit index: {}", index);
+                        result = Self::add_points(&result, &precomputed_points[index]);
+                    } else {
+                        println!("Index out of bounds for precomputed points: {}", index);
+                    }
+                }
+            }
+        } else {
+            println!("Starting scalar multiplication without precomputed points");
+            let mut adder = curve_point.clone();
+
+            for i in (0..scalar.v.bits()).rev() {
+                result = Self::double_point(&result);
+                if scalar.v.bit(i) {
+                    result = Self::add_points(&result, &adder);
+                }
             }
         }
 
@@ -205,8 +267,8 @@ impl SECP256K1 {
     }
 
     /// Derive the public key from a given private key
-    pub(crate) fn public_key(private_key: &RU256) -> Point {
-        Self::scalar_multiplication(&private_key, &Self::g())
+    pub fn public_key(private_key: &RU256) -> Point {
+        Self::scalar_multiplication(&private_key, &Self::g(), false)
     }
 }
 
@@ -245,13 +307,22 @@ mod tests {
     #[test]
     fn public_key_generation_k1() {
         let pub_key = SECP256K1::public_key(&RU256::from_str("1").unwrap());
-        assert_eq!(
-            pub_key.x.to_string().to_uppercase(),
-            "79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798"
+        let secp = Secp256k1::new();
+        let mut scalar_bytes = [0u8; 32];
+        RU256::from_str("1")
+            .unwrap()
+            .v
+            .to_big_endian(&mut scalar_bytes);
+        let secret_key = SecretKey::from_slice(&scalar_bytes).unwrap();
+        let secp_pubkey = PublicKey::from_secret_key(&secp, &secret_key);
+        println!("Generated public key: {}", pub_key.to_hex_string());
+        println!(
+            "Expected public key: {}",
+            hex::encode(secp_pubkey.serialize_uncompressed())
         );
         assert_eq!(
-            pub_key.y.to_string().to_uppercase(),
-            "483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8"
+            pub_key.to_hex_string(),
+            hex::encode(secp_pubkey.serialize_uncompressed())
         );
     }
 
