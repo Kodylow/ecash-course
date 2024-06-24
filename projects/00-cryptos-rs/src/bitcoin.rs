@@ -1,5 +1,5 @@
-use bitcoin_num::uint::Uint256;
 use once_cell::sync::Lazy;
+use primitive_types::U256;
 
 use crate::curves::{Curve, Generator, Point};
 
@@ -18,42 +18,36 @@ pub struct Coin {
 #[allow(non_snake_case)]
 fn bitcoin_gen() -> Generator {
     // Bitcoin uses secp256k1: http://www.oid-info.com/get/1.3.132.0.10
-    let p = Uint256::from_be_bytes(
+    let p = U256::from_big_endian(
         hex::decode("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F")
             .unwrap()
-            .try_into()
-            .unwrap(),
+            .as_slice(),
     );
 
-    let a = Uint256::from_be_bytes(
+    let a = U256::from_big_endian(
         hex::decode("0000000000000000000000000000000000000000000000000000000000000000")
             .unwrap()
-            .try_into()
-            .unwrap(),
+            .as_slice(),
     );
-    let b = Uint256::from_be_bytes(
+    let b = U256::from_big_endian(
         hex::decode("0000000000000000000000000000000000000000000000000000000000000007")
             .unwrap()
-            .try_into()
-            .unwrap(),
+            .as_slice(),
     );
-    let Gx = Uint256::from_be_bytes(
+    let Gx = U256::from_big_endian(
         hex::decode("79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798")
             .unwrap()
-            .try_into()
-            .unwrap(),
+            .as_slice(),
     );
-    let Gy = Uint256::from_be_bytes(
+    let Gy = U256::from_big_endian(
         hex::decode("483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8")
             .unwrap()
-            .try_into()
-            .unwrap(),
+            .as_slice(),
     );
-    let n = Uint256::from_be_bytes(
+    let n = U256::from_big_endian(
         hex::decode("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141")
             .unwrap()
-            .try_into()
-            .unwrap(),
+            .as_slice(),
     );
     let curve = Curve { p, a, b };
     let G = Point {

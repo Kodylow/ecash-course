@@ -1,10 +1,9 @@
 use std::io::{Cursor, Read};
 
-use bitcoin_num::uint::Uint256;
 use once_cell::sync::Lazy;
+use primitive_types::U256;
 
-use crate::curves::pow;
-use crate::{sha256, utils};
+use crate::sha256;
 
 static GENESIS_BLOCK_MAIN: Lazy<Vec<u8>> = Lazy::new(|| {
     hex::decode("0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c").unwrap()
@@ -23,53 +22,47 @@ fn encode_int(i: u32, nbytes: usize) -> Vec<u8> {
     i.to_le_bytes()[..nbytes].to_vec()
 }
 
-fn bits_to_target(bits: &[u8]) -> Uint256 {
-    let exponent = bits[3];
-    let mut coeff_bytes = bits[..3].to_vec();
-    coeff_bytes.reverse();
-    let mut coeff_array = [0u8; 32];
-    coeff_array[..coeff_bytes.len()].copy_from_slice(&coeff_bytes);
-    let coeff = Uint256::from_be_bytes(coeff_array);
-    coeff * pow(&Uint256::from_u64(256u64).unwrap(), (exponent - 3) as u32)
+fn bits_to_target(bits: &[u8]) -> U256 {
+    let exponent = bits[3] as usize;
+    let coeff = U256::from_little_endian(&bits[..3]);
+    coeff * U256::from(256).pow(U256::from(exponent - 3))
 }
 
-fn target_to_bits(target: Uint256) -> Vec<u8> {
-    let b_u64 = target.to_bytes();
-    let mut b = b_u64
-        .iter()
-        .flat_map(|&x| x.to_le_bytes())
-        .collect::<Vec<u8>>();
-    while b.len() > 1 && b[0] == 0 {
+fn target_to_bits(target: U256) -> Vec<u8> {
+    let mut b = vec![0u8; 32];
+    target.to_big_endian(&mut b);
+    while b[0] == 0 {
         b.remove(0);
     }
-    let exponent = b.len() as u8;
-    let coeff = if b.len() >= 3 {
-        b[..3].to_vec()
+    let (exponent, coeff) = if b[0] >= 128 {
+        (b.len() + 1, [0, b[0], b[1]])
     } else {
-        let mut v = b.clone();
-        v.resize(3, 0);
-        v
+        (b.len(), [b[0], b[1], b[2]])
     };
-
-    let mut new_bits = coeff;
-    new_bits.reverse(); // Ensure the coefficient is in little-endian order
-    new_bits.push(exponent);
+    let mut new_bits = coeff.to_vec();
+    new_bits.reverse();
+    new_bits.push(exponent as u8);
     new_bits
 }
 
-fn calculate_new_bits(prev_bits: &[u8], dt: u64) -> Vec<u8> {
+fn calculate_new_bits(prev_bits: &[u8], dt: u32) -> Vec<u8> {
     let two_weeks = 60 * 60 * 24 * 14;
     let dt = dt.clamp(two_weeks / 4, two_weeks * 4);
-    let prev_target = bits_to_target(prev_bits);
-    let new_target = (prev_target * Uint256::from_u64(dt).unwrap()
-        / Uint256::from_u64(two_weeks).unwrap())
-    .min(Uint256::from_u64(0xffff).unwrap() * pow(&Uint256::from_u64(256).unwrap(), (0x1d - 3)));
+    println!("Clamped dt: {}", dt);
 
-    let mut new_bits = target_to_bits(new_target);
-    if new_bits.len() < 4 {
-        new_bits.resize(4, 0);
-    }
-    new_bits
+    let prev_target = bits_to_target(prev_bits);
+    println!("Previous target: {:?}", prev_target);
+
+    let new_target = (prev_target * U256::from(dt)) / U256::from(two_weeks);
+    println!("New target before min: {:?}", new_target);
+
+    let max_target = U256::from(0xffff) * U256::from(256).pow(U256::from(0x1d - 3));
+    println!("Max target: {:?}", max_target);
+
+    let new_target = new_target.min(max_target);
+    println!("New target after min: {:?}", new_target);
+
+    target_to_bits(new_target)
 }
 
 #[derive(Debug, Clone)]
@@ -127,13 +120,12 @@ impl Block {
         hex::encode(result)
     }
 
-    fn target(&self) -> Uint256 {
+    fn target(&self) -> U256 {
         bits_to_target(&self.bits)
     }
 
-    fn difficulty(&self) -> Uint256 {
-        let genesis_block_target =
-            Uint256::from_u64(0xffff).unwrap() * pow(&Uint256::from_u64(256).unwrap(), (0x1d - 3));
+    fn difficulty(&self) -> U256 {
+        let genesis_block_target = U256::from(0xffff) * U256::from(256).pow(U256::from(0x1d - 3));
         let target = self.target();
         let difficulty = genesis_block_target / target;
         difficulty
@@ -142,7 +134,7 @@ impl Block {
     fn validate(&self) -> bool {
         let header_vec = hex::decode(&self.id()).unwrap();
         let header: [u8; 32] = header_vec.try_into().unwrap();
-        let header = Uint256::from_be_bytes(header);
+        let header = U256::from_big_endian(&header);
         let target = self.target();
 
         if header >= target {
@@ -189,17 +181,16 @@ fn test_block() {
     println!("Block target: {:?}", target);
     assert_eq!(
         target,
-        Uint256::from_be_bytes(
-            hex::decode("0000000000000000013ce9000000000000000000000000000000000000000000")
+        U256::from_big_endian(
+            hex::decode("0000000000000000013CE9000000000000000000000000000000000000000000")
                 .unwrap()
-                .try_into()
-                .unwrap()
+                .as_slice()
         )
     );
 
     let difficulty = block.difficulty();
     println!("Block difficulty: {}", difficulty);
-    assert_eq!(difficulty, Uint256::from_u64(888171856257).unwrap());
+    assert_eq!(difficulty, U256::from(888171856257u64));
 }
 
 #[test]
@@ -223,12 +214,19 @@ fn test_validate() {
 fn test_calculate_bits() {
     let dt = 302400;
     let prev_bits = hex::decode("54d80118").unwrap();
+
+    println!("Previous bits: {:?}", prev_bits);
     let next_bits = calculate_new_bits(&prev_bits, dt);
+    println!("Next bits: {:?}", next_bits);
     assert_eq!(next_bits, hex::decode("00157617").unwrap());
 
     for bits in [&prev_bits, &next_bits] {
         let target = bits_to_target(bits);
-        let bits2 = target_to_bits(target.clone());
+        println!("Target for bits {:?}: {:?}", bits, target);
+
+        let bits2 = target_to_bits(target);
+        println!("Bits from target {:?}: {:?}", target, bits2);
+
         assert_eq!(bits, &bits2);
     }
 }
@@ -269,7 +267,7 @@ fn test_genesis_block() {
     let target = block_clone.target();
     println!("Genesis block target: {:?}", target);
     assert_eq!(
-        format!("{:?}", target),
+        format!("{:064x}", target),
         "00000000ffff0000000000000000000000000000000000000000000000000000"
     );
 
