@@ -1,18 +1,16 @@
 use std::io::{Cursor, Read};
 use std::ops::Mul;
 
-use primitive_types::U256;
-
 use crate::bitcoin::BITCOIN;
-use crate::curves::inv;
 use crate::keys::{gen_secret_key, PublicKey};
+use crate::ru256::RU256;
 use crate::sha256::hash256;
 
 // ECDSA Signature
 #[derive(Debug, Clone, PartialEq)]
 pub struct Signature {
-    pub r: U256,
-    pub s: U256,
+    pub r: RU256,
+    pub s: RU256,
 }
 
 impl Signature {
@@ -30,22 +28,22 @@ impl Signature {
         let rlength = byte[0];
         let mut r = vec![0; rlength as usize];
         s.read_exact(&mut r).unwrap();
-        let r = U256::from_big_endian(&r);
+        let r = RU256::from_bytes(&r);
         s.read_exact(&mut byte).unwrap();
         assert_eq!(byte[0], 0x02);
         s.read_exact(&mut byte).unwrap();
         let slength = byte[0];
         let mut s_vec = vec![0; slength as usize];
         s.read_exact(&mut s_vec).unwrap();
-        let s = U256::from_big_endian(&s_vec);
+        let s = RU256::from_bytes(&s_vec);
         assert_eq!(der.len(), 6 + rlength as usize + slength as usize);
         Signature { r, s }
     }
 
     pub fn encode(&self) -> Vec<u8> {
-        fn dern(n: &U256) -> Vec<u8> {
+        fn dern(n: &RU256) -> Vec<u8> {
             let mut nb = vec![0u8; 32];
-            n.to_big_endian(&mut nb);
+            n.to_bytes(&mut nb);
             if nb[0] >= 0x80 {
                 nb.insert(0, 0x00);
             }
@@ -65,68 +63,73 @@ impl Signature {
     }
 }
 
-pub fn sign_ecdsa(secret_key: &U256, message: &[u8]) -> Signature {
+pub fn sign_ecdsa(secret_key: &RU256, message: &[u8]) -> Signature {
+    // Hash the message to sign
+    let z = RU256::from_bytes(&hash256(message.to_vec()));
+
+    // Generate a random nonce
+    let k = gen_secret_key(&BITCOIN.gen.n);
+
+    // Map the nonce scalar to a point on the SECP256k1 curve using the generator as
+    // the base point
+    #[allow(non_snake_case)]
+    let R = PublicKey::from_sk(&k);
+
+    // r is the x component of the point
+    let r = R.0.x.clone();
+
+    // Grab the group order
     let n = &BITCOIN.gen.n;
 
-    let z = U256::from_big_endian(&hash256(message.to_vec()));
-
-    let k = gen_secret_key(n);
-    #[allow(non_snake_case)]
-    let P = PublicKey::from_sk(&k, &BITCOIN.gen);
-
-    let r = P.0.x.clone().unwrap();
-    let s = (inv(k, *n) * (z + *secret_key * r)) % *n;
-
-    // Print values for debugging
-    println!("r: {}", r);
-    println!("s before adjustment: {}", s);
-    println!("n: {}", n);
-
-    let s = if s > *n / U256::from(2) { *n - s } else { s };
-
-    // Print adjusted s
-    println!("s after adjustment: {}", s);
-
-    let s = (s + *n) % *n; // Ensure s is positive
-
-    // Print final s
-    println!("s final: {}", s);
+    // Compute s
+    let s = (r.clone().mul_mod(secret_key, n).add_mod(&z, n)).div_mod(&k, n);
 
     Signature { r, s }
 }
 
 pub fn verify_ecdsa(public_key: &PublicKey, message: &[u8], sig: &Signature) -> bool {
+    // Hash the message
+    let hash = RU256::from_bytes(&hash256(message.to_vec()));
+
+    // Grab the group order
     let n = &BITCOIN.gen.n;
 
-    assert!(sig.r >= U256::from(1) && sig.r < *n);
-    assert!(sig.s >= U256::from(1) && sig.s < *n);
+    // Calculate w = 1/s mod n
+    let w = RU256::from_bytes(&[1]).div_mod(&sig.s, n);
 
-    let z = U256::from_big_endian(&hash256(message.to_vec()));
+    // Calculate u1 = hash * w mod n
+    let u1 = hash.mul_mod(&w, n);
 
-    let w = inv(sig.s, *n);
-    let u1 = (z * w) % *n;
-    let u2 = (sig.r * w) % *n;
-    #[allow(non_snake_case)]
-    let pubkey_point = &public_key.0;
-    #[allow(non_snake_case)]
-    let P = BITCOIN.gen.G.clone().mul(u1) + pubkey_point.clone().mul(u2);
-    P.x.unwrap() == sig.r
+    // Calculate u2 = r * w mod n
+    let u2 = sig.r.mul_mod(&w, n);
+
+    // Calculate u1 * G
+    let u1_point = BITCOIN.gen.G.clone().mul(u1);
+
+    // Calculate u2 * public_key
+    let u2_point = public_key.0.clone().mul(u2);
+
+    // Calculate the verification point
+    let verification_point = u1_point + u2_point;
+
+    // Check if the x-coordinate of the verification point equals r
+    verification_point.x == sig.r
 }
 
-pub fn sign_schnorr(secret_key: &U256, message: &[u8]) -> Signature {
+pub fn sign_schnorr(secret_key: &RU256, message: &[u8]) -> Signature {
     let n = &BITCOIN.gen.n;
 
     let k = gen_secret_key(n);
     #[allow(non_snake_case)]
-    let R = PublicKey::from_sk(&k, &BITCOIN.gen);
+    let R = PublicKey::from_sk(&k);
 
-    let r = R.0.x.clone().unwrap();
+    let r = R.0.x.clone();
     let mut bytes_vec = vec![0u8; 32];
-    r.to_big_endian(&mut bytes_vec);
+    r.to_bytes(&mut bytes_vec);
     bytes_vec.extend_from_slice(message);
     let hashed = hash256(bytes_vec);
-    let e = U256::from_big_endian(&hashed);
-    let s = (k + e * *secret_key) % *n;
+    let e = RU256::from_bytes(&hashed);
+    let s = (k + e * secret_key.clone()) % n.clone();
 
     Signature { r, s }
 }
@@ -134,20 +137,20 @@ pub fn sign_schnorr(secret_key: &U256, message: &[u8]) -> Signature {
 pub fn verify_schnorr(public_key: &PublicKey, message: &[u8], sig: &Signature) -> bool {
     let n = &BITCOIN.gen.n;
 
-    assert!(sig.r >= U256::from(1) && sig.r < *n);
-    assert!(sig.s >= U256::from(1) && sig.s < *n);
+    assert!(sig.r >= RU256::from_u64(1) && sig.r < *n);
+    assert!(sig.s >= RU256::from_u64(1) && sig.s < *n);
 
     let mut bytes_vec = vec![0u8; 32];
-    sig.r.to_big_endian(&mut bytes_vec);
+    sig.r.to_bytes(&mut bytes_vec);
     bytes_vec.extend_from_slice(message);
     let hashed = hash256(bytes_vec);
-    let e = U256::from_big_endian(&hashed);
+    let e = RU256::from_bytes(&hashed);
     #[allow(non_snake_case)]
     let pubkey_point = &public_key.0;
     #[allow(non_snake_case)]
     let R = BITCOIN.gen.G.clone().mul(sig.s.clone()) + (-pubkey_point.clone().mul(e));
 
-    R.x.unwrap() == sig.r
+    R.x == sig.r
 }
 
 #[cfg(test)]
@@ -156,8 +159,8 @@ mod tests {
 
     #[test]
     fn test_signature_encode_decode() {
-        let r = U256::from(12345);
-        let s = U256::from(67890);
+        let r = RU256::from_u64(12345);
+        let s = RU256::from_u64(67890);
         let sig = Signature { r, s };
         let der = sig.encode();
         let decoded_sig = Signature::decode(&der);
@@ -166,12 +169,14 @@ mod tests {
 
     #[test]
     fn test_signature_der_encoding() {
-        let r = U256::from_dec_str(
+        let r = RU256::from_str_radix(
             "4051293998585674784991639592782214972820158391371785981004352359465450369227",
+            10,
         )
         .unwrap();
-        let s = U256::from_dec_str(
+        let s = RU256::from_str_radix(
             "14135989968836420515709829771811628865775953163796562851092287839230222744152",
+            10,
         )
         .unwrap();
         let sig = Signature { r, s };
@@ -185,15 +190,15 @@ mod tests {
         let secret_key = gen_secret_key(&BITCOIN.gen.n);
         let message = b"test message";
 
-        println!("Secret Key: {}", secret_key);
+        println!("Secret Key: {:?}", secret_key);
         println!("Message: {:?}", message);
 
         let sig = sign_ecdsa(&secret_key, message);
 
-        println!("Signature r: {}", sig.r);
-        println!("Signature s: {}", sig.s);
+        println!("Signature r: {:?}", sig.r);
+        println!("Signature s: {:?}", sig.s);
 
-        let public_key = PublicKey::from_sk(&secret_key, &BITCOIN.gen);
+        let public_key = PublicKey::from_sk(&secret_key);
 
         println!("Public Key: {:?}", public_key);
 
@@ -207,7 +212,7 @@ mod tests {
     #[test]
     fn test_verify_ecdsa() {
         let secret_key = gen_secret_key(&BITCOIN.gen.n);
-        let public_key = PublicKey::from_sk(&secret_key, &BITCOIN.gen);
+        let public_key = PublicKey::from_sk(&secret_key);
         let message = b"test message";
         let sig = sign_ecdsa(&secret_key, message);
         assert!(verify_ecdsa(&public_key, message, &sig));
@@ -219,7 +224,7 @@ mod tests {
         let message = b"test message";
         let sig = sign_schnorr(&secret_key, message);
         assert!(verify_schnorr(
-            &PublicKey::from_sk(&secret_key, &BITCOIN.gen),
+            &PublicKey::from_sk(&secret_key),
             message,
             &sig
         ));
@@ -228,7 +233,7 @@ mod tests {
     #[test]
     fn test_verify_schnorr() {
         let secret_key = gen_secret_key(&BITCOIN.gen.n);
-        let public_key = PublicKey::from_sk(&secret_key, &BITCOIN.gen);
+        let public_key = PublicKey::from_sk(&secret_key);
         let message = b"test message";
         let sig = sign_schnorr(&secret_key, message);
         assert!(verify_schnorr(&public_key, message, &sig));

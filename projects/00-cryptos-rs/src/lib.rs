@@ -1,9 +1,10 @@
 pub mod bitcoin;
 pub mod block;
-pub mod curves;
 pub mod keys;
 pub mod network;
 pub mod ripemd160;
+pub mod ru256;
+pub mod secp256k1;
 pub mod sha256;
 pub mod signature;
 pub mod transaction;

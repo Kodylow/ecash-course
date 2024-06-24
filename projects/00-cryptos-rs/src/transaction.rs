@@ -279,7 +279,7 @@ impl Script {
         }
         let der = &signature[..signature.len() - 1];
         let sig = Signature::decode(der);
-        let pk = PublicKey::from_bytes(pubkey, &BITCOIN.gen.G.curve);
+        let pk = PublicKey::from_bytes(pubkey);
         verify_ecdsa(&pk, mod_tx_enc, &sig)
     }
 }

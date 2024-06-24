@@ -4,27 +4,20 @@ use primitive_types::U256;
 use rand::Rng;
 use sha2::{Digest, Sha256};
 
-use crate::curves::{Curve, Generator, Point};
 use crate::ripemd160::ripemd160;
+use crate::ru256::RU256;
+use crate::secp256k1::{Point, SECP256K1};
 
 // Secret key generation
-pub fn gen_secret_key(n: &U256) -> U256 {
+pub fn gen_secret_key(n: &RU256) -> RU256 {
     loop {
         let mut rng = rand::thread_rng();
         let mut key_bytes = [0u8; 32];
         rng.fill(&mut key_bytes);
-        let key = U256::from_big_endian(&key_bytes);
-        if key >= U256::from(1) && key < *n {
+        let key = RU256::from_bytes(&key_bytes);
+        if key >= RU256::from_u64(1) && key < *n {
             return key;
         }
-    }
-}
-
-impl Mul<&Point> for U256 {
-    type Output = Point;
-
-    fn mul(self, point: &Point) -> Point {
-        point.clone() * self
     }
 }
 
@@ -37,77 +30,21 @@ impl PublicKey {
         PublicKey(pt)
     }
 
-    pub fn from_sk(sk: &U256, gen: &Generator) -> Self {
-        let pk = *sk * &gen.G;
-
+    pub fn from_sk(sk: &RU256) -> Self {
+        let pk = SECP256K1::public_key(sk);
         PublicKey::from_point(pk)
     }
 
-    pub fn from_bytes(b: &[u8], curve: &Curve) -> PublicKey {
-        PublicKey::from_point(PublicKey::decode(b, curve))
+    pub fn from_bytes(b: &[u8]) -> PublicKey {
+        PublicKey::from_point(PublicKey::decode(b))
     }
 
-    pub fn decode(b: &[u8], curve: &Curve) -> Point {
-        assert!(b.len() == 33 || b.len() == 65);
-
-        if b[0] == 4 {
-            let x = U256::from_big_endian(&b[1..33]);
-            let y = U256::from_big_endian(&b[33..65]);
-            return Point {
-                curve: curve.clone(),
-                x: Some(x),
-                y: Some(y),
-            };
-        }
-
-        assert!(b[0] == 2 || b[0] == 3);
-        let is_even = b[0] == 2;
-        let x = U256::from_big_endian(&b[1..33]);
-
-        let p = &curve.p;
-        let y2 = (x.pow(U256::from(3)) + U256::from(7)) % *p;
-        let exponent = ((*p + U256::from(1)) >> 2).low_u32();
-        let mut y = y2.pow(U256::from(exponent));
-        if (y % U256::from(2) == U256::from(0)) != is_even {
-            y = *p - y;
-        }
-        Point {
-            curve: curve.clone(),
-            x: Some(x),
-            y: Some(y),
-        }
+    pub fn decode(b: &[u8]) -> Point {
+        todo!()
     }
 
     pub fn encode(&self, compressed: bool, hash160: bool) -> Vec<u8> {
-        let mut pkb = if compressed {
-            let prefix = if self.0.y.as_ref().unwrap().rem(U256::from(2)) == U256::from(0) {
-                2u8
-            } else {
-                3u8
-            };
-            let mut res = vec![prefix];
-            let mut x_bytes = [0u8; 32];
-            self.0.x.as_ref().unwrap().to_big_endian(&mut x_bytes);
-            res.extend_from_slice(&x_bytes);
-            res
-        } else {
-            let mut res = vec![4u8];
-            let mut x_bytes = [0u8; 32];
-            self.0.x.as_ref().unwrap().to_big_endian(&mut x_bytes);
-            res.extend_from_slice(&x_bytes);
-            let mut y_bytes = [0u8; 32];
-            self.0.y.as_ref().unwrap().to_big_endian(&mut y_bytes);
-            res.extend_from_slice(&y_bytes);
-            res
-        };
-
-        if hash160 {
-            let sha256_hash = Sha256::digest(&pkb);
-            let ripemd160_hash = ripemd160(&sha256_hash);
-            pkb = ripemd160_hash.to_vec();
-        }
-
-        pkb
+        todo!()
     }
 
     pub fn address(&self, net: &str, compressed: bool) -> String {
@@ -126,9 +63,9 @@ impl PublicKey {
 }
 
 // Convenience functions
-pub fn gen_key_pair(gen: &Generator) -> (U256, PublicKey) {
-    let sk = gen_secret_key(&gen.n);
-    let pk = PublicKey::from_sk(&sk, gen);
+pub fn gen_key_pair() -> (RU256, PublicKey) {
+    let sk = gen_secret_key(&SECP256K1::n().into());
+    let pk = PublicKey::from_sk(&sk.clone().into());
     (sk, pk)
 }
 
@@ -182,21 +119,19 @@ pub fn address_to_pkb_hash(b58check_address: &str) -> Vec<u8> {
 
 #[test]
 fn test_public_key_gen() {
-    use crate::bitcoin::BITCOIN;
     // Example taken from Chapter 4 of Mastering Bitcoin
     let sk_hex = "1E99423A4ED27608A15A2616A2B0E9E52CED330AC530EDCC32C8FFC6A526AEDD";
 
     let sk_bytes = hex::decode(sk_hex).unwrap();
+    let sk = RU256::from_bytes(&sk_bytes);
 
-    let sk = U256::from_big_endian(&sk_bytes);
+    let public_key = PublicKey::from_sk(&sk);
 
-    let public_key = PublicKey::from_sk(&sk, &BITCOIN.gen);
+    let pk_x = public_key.0.x;
+    let pk_y = public_key.0.y;
 
-    let pk_x = public_key.0.x.unwrap();
-    let pk_y = public_key.0.y.unwrap();
-
-    let pk_x_hex = format!("{:064x}", pk_x).to_uppercase();
-    let pk_y_hex = format!("{:064x}", pk_y).to_uppercase();
+    let pk_x_hex = pk_x.to_string().to_uppercase();
+    let pk_y_hex = pk_y.to_string().to_uppercase();
 
     assert_eq!(
         pk_x_hex,
@@ -210,7 +145,6 @@ fn test_public_key_gen() {
 
 #[test]
 fn test_btc_addresses() {
-    use crate::bitcoin::BITCOIN;
     // tuples of (net, compressed, secret key in hex, expected compressed bitcoin
     // address string in b58check)
     let tests = vec![
@@ -248,16 +182,16 @@ fn test_btc_addresses() {
 
     // test address encoding into b58check
     for (net, compressed, secret_key, expected_address) in tests.iter() {
-        let sk = U256::from_big_endian(&hex::decode(secret_key).unwrap());
-        let pk = PublicKey::from_sk(&sk, &BITCOIN.gen);
+        let sk = RU256::from_bytes(&hex::decode(secret_key).unwrap());
+        let pk = PublicKey::from_sk(&sk);
         let addr = pk.address(net, *compressed);
         assert_eq!(addr, *expected_address);
     }
 
     // test public key hash decoding from b58check
     for (net, compressed, secret_key, address) in tests.iter() {
-        let sk = U256::from_big_endian(&hex::decode(secret_key).unwrap());
-        let pk = PublicKey::from_sk(&sk, &BITCOIN.gen);
+        let sk = RU256::from_bytes(&hex::decode(secret_key).unwrap());
+        let pk = PublicKey::from_sk(&sk);
         // get the hash160 by stripping version byte and checksum
         let pkb_hash = pk.encode(*compressed, true);
         // now extract from the address, address_to_pkb_hash
@@ -269,17 +203,16 @@ fn test_btc_addresses() {
 #[test]
 #[allow(non_snake_case)]
 fn test_pk_sec() {
-    use crate::bitcoin::BITCOIN;
-    let G = &BITCOIN.gen.G;
+    let G = SECP256K1::g();
 
     // these examples are taken from Programming Bitcoin Chapter 4 exercises
     let tests = vec![
-        (U256::from(5000) * G, false, "04ffe558e388852f0120e46af2d1b370f85854a8eb0841811ece0e3e03d282d57c315dc72890a4f10a1481c031b03b351b0dc79901ca18a00cf009dbdb157a1d10"),
-        (U256::from(2018u64).pow(U256::from(5)) * G, false, "04027f3da1918455e03c46f659266a1bb5204e959db7364d2f473bdf8f0a13cc9dff87647fd023c13b4a4994f17691895806e1b40b57f4fd22581a4f46851f3b06"),
-        (U256::from(0xdeadbeef12345u64) * G, false, "04d90cd625ee87dd38656dd95cf79f65f60f7273b67d3096e68bd81e4f5342691f842efa762fd59961d0e99803c61edba8b3e3f7dc3a341836f97733aebf987121"),
-        (U256::from(5001) * G, true, "0357a4f368868a8a6d572991e484e664810ff14c05c0fa023275251151fe0e53d1"),
-        (U256::from(2019u64).pow(U256::from(5)) * G, true, "02933ec2d2b111b92737ec12f1c5d20f3233a0ad21cd8b36d0bca7a0cfa5cb8701"),
-        (U256::from(0xdeadbeef54321u64) * G, true, "0296be5b1292f6c856b3c5654e886fc13511462059089cdf9c479623bfcbe77690"),
+        (G.clone() * RU256::from_u64(5000), false, "04ffe558e388852f0120e46af2d1b370f85854a8eb0841811ece0e3e03d282d57c315dc72890a4f10a1481c031b03b351b0dc79901ca18a00cf009dbdb157a1d10"),
+        (G.clone() * RU256::from_u64(2018) * RU256::from_u64(5), false, "04027f3da1918455e03c46f659266a1bb5204e959db7364d2f473bdf8f0a13cc9dff87647fd023c13b4a4994f17691895806e1b40b57f4fd22581a4f46851f3b06"),
+        (G.clone() * RU256::from_u64(0xdeadbeef12345), false, "04d90cd625ee87dd38656dd95cf79f65f60f7273b67d3096e68bd81e4f5342691f842efa762fd59961d0e99803c61edba8b3e3f7dc3a341836f97733aebf987121"),
+        (G.clone() * RU256::from_u64(5001), true, "0357a4f3688868a8a6d572991e484e664810ff14c05c0fa023275251151fe0e53d1"),
+        (G.clone() * RU256::from_u64(2019) * RU256::from_u64(5), true, "02933ec2d2b111b92737ec12f1c5d20f3233a0ad21cd8b36d0bca7a0cfa5cb8701"),
+        (G * RU256::from_u64(0xdeadbeef54321), true, "0296be5b1292f6c856b3c5654e886fc13511462059089cdf9c479623bfcbe77690"),
     ];
 
     for (P, compressed, sec_gt) in tests.iter() {
@@ -287,7 +220,7 @@ fn test_pk_sec() {
         let sec = PublicKey::from_point(P.clone()).encode(*compressed, false);
         assert_eq!(hex::encode(sec), *sec_gt);
         // decode
-        let P2 = PublicKey::decode(&hex::decode(sec_gt).unwrap(), &BITCOIN.gen.G.curve);
+        let P2 = PublicKey::decode(&hex::decode(sec_gt).unwrap());
         assert_eq!(P.x, P2.x);
         assert_eq!(P.y, P2.y);
     }
